@@ -56,12 +56,41 @@
 <body class="antialiased">
     <div id="canvas-container"></div>
     
-    <!-- Overlays -->
+    <!-- Overlays and Modals -->
     <div id="loader" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 hidden"><div class="loader"></div></div>
     <div id="toast" class="toast"></div>
 
-    <!-- Modals (Add Post, Comments, etc.) -->
-    <!-- Add your modal HTML structure here, styled with the new theme -->
+    <div id="newPostPage" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-40 p-4">
+        <div id="passwordSection" class="glass-card p-8 w-full max-w-sm">
+            <h2 class="text-2xl font-bold text-center mb-4 text-white">Admin Access</h2>
+            <input type="password" id="passwordInput" class="w-full bg-gray-800/50 border border-[var(--border-color)] rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent-color)]" placeholder="Password">
+            <p id="passwordError" class="text-red-500 text-center mt-3 hidden">Invalid Password!</p>
+            <div class="flex gap-4 mt-6">
+                <button id="cancelPasswordBtn" class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 rounded-lg">Cancel</button>
+                <button id="passwordSubmitBtn" class="w-full btn-primary py-2">Enter</button>
+            </div>
+        </div>
+        <div id="postFormSection" class="glass-card p-8 w-full max-w-md hidden">
+            <h2 class="text-2xl font-bold text-center mb-6 text-white">Create New Post</h2>
+            <textarea id="postTextarea" class="w-full bg-gray-800/50 border border-[var(--border-color)] rounded-lg px-4 py-2 text-white h-40 resize-none focus:outline-none focus:ring-2 focus:ring-[var(--accent-color)]" placeholder="What's on your mind?"></textarea>
+            <div class="flex gap-4 mt-6">
+                <button id="cancelPostBtn" class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 rounded-lg">Cancel</button>
+                <button id="submitPostBtn" class="w-full btn-primary py-2">Post</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="commentModal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-40 p-4">
+        <div class="glass-card w-full max-w-lg p-6">
+            <h2 class="text-2xl mb-4 text-white">Comments</h2>
+            <div id="commentList" class="max-h-60 overflow-y-auto space-y-3 mb-4 pr-2"></div>
+            <textarea id="commentTextarea" class="w-full bg-gray-800/50 border border-[var(--border-color)] rounded-lg px-4 py-2 text-white h-20 resize-none" placeholder="Add a comment..."></textarea>
+            <div class="flex justify-end gap-3 mt-3">
+                <button id="closeCommentModal" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg">Close</button>
+                <button id="submitCommentBtn" class="btn-primary py-2 px-4">Submit</button>
+            </div>
+        </div>
+    </div>
 
     <div class="content-wrapper min-h-screen flex flex-col items-center p-4 lg:p-8">
         <header id="profile-header" class="glass-card text-center p-8 mb-8 w-full max-w-2xl">
@@ -90,8 +119,239 @@ document.addEventListener('DOMContentLoaded', () => {
     const REPO_OWNER = 'MrHasan1337'; // ⚠️ আপনার GitHub ইউজারনেম দিন
     const REPO_NAME = 'ZzTool-'; // ⚠️ আপনার প্রাইভেট রিপোজিটরির নাম দিন
     const FILE_PATH = 'data/database.json';
+    const ADMIN_PASSWORD = 'hasan2025';
 
-    // --- 3D Scene ---
+    // --- 3D Scene (Same as before, no changes) ---
+    // ... (3D কোডটি এখানে অপরিবর্তিত রাখা হয়েছে)
+
+    // --- DOM Elements ---
+    const loader = document.getElementById('loader');
+    const toast = document.getElementById('toast');
+    const postFeed = document.getElementById('postFeed');
+    const searchInput = document.getElementById('searchInput');
+
+    // Modals
+    const newPostPage = document.getElementById('newPostPage');
+    const passwordSection = document.getElementById('passwordSection');
+    const postFormSection = document.getElementById('postFormSection');
+    const commentModal = document.getElementById('commentModal');
+    const commentList = document.getElementById('commentList');
+    
+    let db = { posts: [] };
+    let fileSha = null;
+    let activePostIdForComment = null;
+
+    // --- GitHub API Service ---
+    const githubApi = {
+        async request(endpoint, options = {}) {
+            const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/${endpoint}`;
+            const headers = {
+                'Authorization': `token ${GITHUB_TOKEN}`,
+                'Accept': 'application/vnd.github.v3+json',
+                ...options.headers,
+            };
+            const response = await fetch(url, { ...options, headers });
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(`GitHub API Error: ${response.status} - ${err.message}`);
+            }
+            return response.json();
+        },
+        async getData() {
+            showLoader(true);
+            try {
+                const data = await this.request(`contents/${FILE_PATH}`);
+                fileSha = data.sha;
+                const content = atob(data.content);
+                return JSON.parse(content);
+            } catch (error) {
+                showToast('Error loading posts!', true);
+                console.error(error);
+                return { posts: [] };
+            } finally {
+                showLoader(false);
+            }
+        },
+        async updateData(data, message) {
+            showLoader(true);
+            try {
+                const content = btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2))));
+                const response = await this.request(`contents/${FILE_PATH}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        message: message,
+                        content: content,
+                        sha: fileSha,
+                    }),
+                });
+                fileSha = response.content.sha; // Update SHA for next request
+                return true;
+            } catch (error) {
+                showToast('Error saving data!', true);
+                console.error(error);
+                return false;
+            } finally {
+                showLoader(false);
+            }
+        }
+    };
+
+    const showLoader = (show) => loader.style.display = show ? 'flex' : 'none';
+    const showToast = (message, isError = false) => {
+        toast.textContent = message;
+        toast.style.backgroundColor = isError ? '#E53E3E' : 'var(--accent-color)';
+        toast.style.color = isError ? '#FFF' : '#1A1A1A';
+        toast.style.opacity = '1';
+        setTimeout(() => toast.style.opacity = '0', 3000);
+    };
+
+    // --- Post Rendering ---
+    function renderPosts(posts) {
+        postFeed.innerHTML = '';
+        const filteredPosts = posts.filter(post => post.text.toLowerCase().includes(searchInput.value.toLowerCase()));
+        
+        filteredPosts.slice().reverse().forEach(post => {
+            const postCard = document.createElement('div');
+            postCard.className = 'glass-card p-6';
+            postCard.innerHTML = `
+                <div class="flex items-center mb-4">
+                    <img src="https://i.ibb.co/dwpxcLH/6-C8-DAFBF-03-F7-44-CA-B076-6-A4-ABF98-B7-CB.jpg" class="w-12 h-12 rounded-full mr-4 border-2 border-[var(--accent-color)]">
+                    <div>
+                        <h3 class="font-bold text-lg text-white">Mr.Hasan</h3>
+                        <p class="text-sm text-[var(--text-secondary)]">${new Date(post.timestamp).toLocaleString()}</p>
+                    </div>
+                </div>
+                <p class="text-[var(--text-primary)] whitespace-pre-wrap">${post.text}</p>
+                <div class="mt-4 pt-4 border-t border-[var(--border-color)] flex justify-around items-center text-[var(--text-secondary)]">
+                    <button class="like-btn hover:text-red-500 flex items-center gap-2 transition-colors" data-id="${post.id}"><i class="far fa-heart"></i> <span class="like-count">${post.likes}</span></button>
+                    <button class="comment-btn hover:text-blue-400 flex items-center gap-2 transition-colors" data-id="${post.id}"><i class="far fa-comment"></i> ${post.comments.length}</button>
+                    <button class="share-btn hover:text-green-400 flex items-center gap-2 transition-colors" data-id="${post.id}"><i class="far fa-share-square"></i> Share</button>
+                </div>
+            `;
+            postFeed.appendChild(postCard);
+        });
+    }
+
+    // --- Event Listeners ---
+    postFeed.addEventListener('click', async (e) => {
+        const button = e.target.closest('button');
+        if (!button) return;
+        
+        const postId = button.dataset.id;
+        const postIndex = db.posts.findIndex(p => p.id === postId);
+        if (postIndex === -1) return;
+
+        if (button.classList.contains('like-btn')) {
+            db.posts[postIndex].likes++;
+            if (await githubApi.updateData(db, `Liked post ${postId}`)) {
+                showToast('Post Liked!');
+                renderPosts(db.posts);
+            } else {
+                db.posts[postIndex].likes--; // Revert
+            }
+        } else if (button.classList.contains('comment-btn')) {
+            activePostIdForComment = postId;
+            const comments = db.posts[postIndex].comments;
+            commentList.innerHTML = comments.length ? '' : '<p class="text-gray-400 text-center">No comments yet.</p>';
+            comments.forEach(c => {
+                const div = document.createElement('div');
+                div.className = 'bg-gray-800/50 p-3 rounded-lg text-sm';
+                div.innerHTML = `<p class="font-bold text-white">Guest <span class="text-xs text-gray-400 font-light">${new Date(c.timestamp).toLocaleTimeString()}</span></p><p class="text-gray-300">${c.text}</p>`;
+                commentList.appendChild(div);
+            });
+            commentModal.style.display = 'flex';
+        } else if (button.classList.contains('share-btn')) {
+            const url = `${window.location.origin}${window.location.pathname}?post=${postId}`;
+            navigator.clipboard.writeText(url).then(() => showToast('Post link copied!'));
+        }
+    });
+    
+    searchInput.addEventListener('input', () => renderPosts(db.posts));
+
+    // --- Modal Logic ---
+    document.getElementById('addPostBtn').addEventListener('click', () => {
+        newPostPage.style.display = 'flex';
+        passwordSection.style.display = 'block';
+        postFormSection.style.display = 'none';
+    });
+
+    function closePostModal() {
+        newPostPage.style.display = 'none';
+        document.getElementById('passwordInput').value = '';
+        document.getElementById('postTextarea').value = '';
+    }
+
+    document.getElementById('cancelPasswordBtn').addEventListener('click', closePostModal);
+    document.getElementById('cancelPostBtn').addEventListener('click', closePostModal);
+
+    document.getElementById('passwordSubmitBtn').addEventListener('click', () => {
+        const password = document.getElementById('passwordInput').value;
+        const errorP = document.getElementById('passwordError');
+        if (password === ADMIN_PASSWORD) {
+            passwordSection.style.display = 'none';
+            postFormSection.style.display = 'block';
+            errorP.style.display = 'none';
+        } else {
+            errorP.style.display = 'block';
+        }
+    });
+
+    document.getElementById('submitPostBtn').addEventListener('click', async () => {
+        const text = document.getElementById('postTextarea').value.trim();
+        if (!text) return;
+
+        const newPost = {
+            id: `post_${Date.now()}`,
+            text: text,
+            timestamp: new Date().toISOString(),
+            likes: 0,
+            comments: []
+        };
+        db.posts.push(newPost);
+        
+        if (await githubApi.updateData(db, `Created new post: ${newPost.id}`)) {
+            showToast('Post created successfully!');
+            closePostModal();
+            renderPosts(db.posts);
+        } else {
+            db.posts.pop(); // Revert on failure
+        }
+    });
+    
+    document.getElementById('closeCommentModal').addEventListener('click', () => commentModal.style.display = 'none');
+    document.getElementById('submitCommentBtn').addEventListener('click', async () => {
+        const textarea = document.getElementById('commentTextarea');
+        const text = textarea.value.trim();
+        if (!text || !activePostIdForComment) return;
+
+        const postIndex = db.posts.findIndex(p => p.id === activePostIdForComment);
+        const newComment = { text, timestamp: new Date().toISOString() };
+        db.posts[postIndex].comments.push(newComment);
+
+        if (await githubApi.updateData(db, `Commented on post ${activePostIdForComment}`)) {
+            showToast('Comment added!');
+            textarea.value = '';
+            commentModal.style.display = 'none';
+            renderPosts(db.posts);
+        } else {
+            db.posts[postIndex].comments.pop(); // Revert
+        }
+    });
+
+    // --- Initial Load ---
+    async function loadApp() {
+        if (!GITHUB_TOKEN || GITHUB_TOKEN.includes('YOUR_NEW_GITHUB_PAT')) {
+            showToast("GitHub Token not configured!", true);
+            postFeed.innerHTML = `<div class="glass-card p-6 text-center text-red-400">Error: GitHub API is not configured. Please add a valid token in the script.</div>`;
+            return;
+        }
+        db = await githubApi.getData();
+        renderPosts(db.posts);
+    }
+
+    loadApp();
+    
+    // 3D Scene (Same as before, copy from previous version)
     const canvasContainer = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -101,7 +361,6 @@ document.addEventListener('DOMContentLoaded', () => {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     canvasContainer.appendChild(renderer.domElement);
     
-    // Starfield
     const starGeometry = new THREE.BufferGeometry();
     const starCount = 10000;
     const posArray = new Float32Array(starCount * 3);
@@ -113,7 +372,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const stars = new THREE.Points(starGeometry, starMaterial);
     scene.add(stars);
 
-    // Central Object
     const group = new THREE.Group();
     const icosahedronGeometry = new THREE.IcosahedronGeometry(1.5, 0);
     const wireframeMaterial = new THREE.MeshBasicMaterial({ color: 'gold', wireframe: true, transparent: true, opacity: 0.5 });
@@ -131,51 +389,39 @@ document.addEventListener('DOMContentLoaded', () => {
     group.add(core);
     scene.add(group);
     
-    // Lights
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.1);
     scene.add(ambientLight);
     const pointLight = new THREE.PointLight(0xffffff, 1);
     pointLight.position.set(5, 5, 5);
     scene.add(pointLight);
 
-    // Mouse Interaction
     let isDragging = false;
     let previousMousePosition = { x: 0, y: 0 };
     let rotationVelocity = { x: 0, y: 0 };
     const dampingFactor = 0.95;
 
-    canvasContainer.addEventListener('mousedown', (e) => { isDragging = true; canvasContainer.style.cursor = 'grabbing'; });
+    canvasContainer.addEventListener('mousedown', (e) => { isDragging = true; canvasContainer.style.cursor = 'grabbing'; previousMousePosition = {x: e.offsetX, y: e.offsetY}; });
     window.addEventListener('mouseup', () => { isDragging = false; canvasContainer.style.cursor = 'grab'; });
     window.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
-        const deltaMove = {
-            x: e.offsetX - previousMousePosition.x,
-            y: e.offsetY - previousMousePosition.y
-        };
-        
+        const deltaMove = { x: e.offsetX - previousMousePosition.x, y: e.offsetY - previousMousePosition.y };
         rotationVelocity.y += deltaMove.x * 0.0005;
         rotationVelocity.x += deltaMove.y * 0.0005;
-        
         previousMousePosition = { x: e.offsetX, y: e.offsetY };
     });
     
     const clock = new THREE.Clock();
     function animate() {
         requestAnimationFrame(animate);
-        const elapsedTime = clock.getElapsedTime();
-        
-        // Inertia
         group.rotation.y += rotationVelocity.y;
         group.rotation.x += rotationVelocity.x;
         rotationVelocity.y *= dampingFactor;
         rotationVelocity.x *= dampingFactor;
 
-        // Auto-rotation
         if (!isDragging && Math.abs(rotationVelocity.x) < 0.0001 && Math.abs(rotationVelocity.y) < 0.0001) {
             group.rotation.y += 0.0005;
         }
-
-        stars.rotation.y = elapsedTime * 0.01;
+        stars.rotation.y += 0.0001;
         renderer.render(scene, camera);
     }
     animate();
@@ -185,90 +431,6 @@ document.addEventListener('DOMContentLoaded', () => {
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
-
-    // --- The rest of your application logic (GitHub API, Posts, etc.) goes here ---
-    // This part is kept the same as the previous version for functionality
-    const loader = document.getElementById('loader');
-    const postFeed = document.getElementById('postFeed');
-    const toast = document.getElementById('toast');
-
-    let db = { posts: [] };
-    let fileSha = null;
-
-    const githubApi = {
-        async request(endpoint, options = {}) {
-            // (Same as previous version)
-        },
-        async getData() {
-             showLoader(true);
-            try {
-                const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${FILE_PATH}`;
-                const response = await fetch(url, {
-                    headers: { 'Authorization': `token ${GITHUB_TOKEN}` }
-                });
-                if (!response.ok) throw new Error('Failed to fetch data');
-                const data = await response.json();
-                fileSha = data.sha;
-                return JSON.parse(atob(data.content));
-            } catch (error) {
-                console.error("Error fetching data:", error);
-                showToast("Error loading posts!", true);
-                return { posts: [] };
-            } finally {
-                showLoader(false);
-            }
-        },
-        async updateData(data) {
-            // (Same as previous version)
-        }
-    };
-    
-    const showLoader = (show) => loader.style.display = show ? 'flex' : 'none';
-    const showToast = (message, isError = false) => {
-        toast.textContent = message;
-        toast.style.backgroundColor = isError ? '#E53E3E' : 'var(--accent-color)';
-        toast.style.opacity = '1';
-        setTimeout(() => toast.style.opacity = '0', 3000);
-    };
-
-    const renderPosts = (posts) => {
-        postFeed.innerHTML = '';
-        posts.slice().reverse().forEach(post => {
-            const postCard = document.createElement('div');
-            postCard.className = 'glass-card p-6';
-            postCard.innerHTML = `
-                <div class="flex items-center mb-4">
-                    <img src="https://i.ibb.co/dwpxcLH/6-C8-DAFBF-03-F7-44-CA-B076-6-A4-ABF98-B7-CB.jpg" class="w-12 h-12 rounded-full mr-4 border-2 border-[var(--accent-color)]">
-                    <div>
-                        <h3 class="font-bold text-lg text-white">Mr.Hasan</h3>
-                        <p class="text-sm text-[var(--text-secondary)]">${new Date(post.timestamp).toLocaleString()}</p>
-                    </div>
-                </div>
-                <p class="text-[var(--text-primary)] whitespace-pre-wrap">${post.text}</p>
-                <div class="mt-4 pt-4 border-t border-gray-700 flex justify-around items-center text-[var(--text-secondary)]">
-                    <button class="like-btn hover:text-red-500 flex items-center gap-2 transition-colors" data-id="${post.id}"><i class="far fa-heart"></i> <span class="like-count">${post.likes}</span></button>
-                    <button class="comment-btn hover:text-blue-400 flex items-center gap-2 transition-colors" data-id="${post.id}"><i class="far fa-comment"></i> ${post.comments.length}</button>
-                    <button class="share-btn hover:text-green-400 flex items-center gap-2 transition-colors" data-id="${post.id}"><i class="far fa-share-square"></i> Share</button>
-                </div>
-            `;
-            postFeed.appendChild(postCard);
-        });
-    };
-
-    async function loadApp() {
-        if (!GITHUB_TOKEN || GITHUB_TOKEN === 'YOUR_NEW_GITHUB_PAT') {
-            showToast("GitHub Token not configured!", true);
-            postFeed.innerHTML = `<div class="glass-card p-6 text-center text-red-400">Error: GitHub API is not configured in the code.</div>`;
-            return;
-        }
-        db = await githubApi.getData();
-        renderPosts(db.posts);
-    }
-
-    loadApp();
-    
-    // Add event listeners for like, comment, share, new post... (same logic as before)
-    // NOTE: This part is omitted for brevity but should be copied from the previous version's script.
 });
 </script>
 </body>
